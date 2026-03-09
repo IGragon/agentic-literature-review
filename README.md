@@ -111,7 +111,7 @@ This project demonstrates several core **Agentic AI system design patterns**:
 
 ## Example Input
 
-``` Topic: "Prompt injection attacks in LLM agents" ```
+```Topic: "Prompt injection attacks in LLM agents"```
  
 
 ## Example Output
