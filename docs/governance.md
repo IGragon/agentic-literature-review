@@ -15,7 +15,7 @@ This document describes safety considerations and risk mitigation strategies for
 | API rate limits | Medium | Medium | API error logs | Retry policy | Low |
 | Large malicious files | Low | Medium | File size check | Download limits | Low |
 | Data leakage through prompts | Low | High | Prompt logging | Strict system prompts | Low |
-
+        
 ---
 
 # 2. Logging Policy

@@ -170,7 +170,12 @@ External integrations:
 - LLM API
 - Embedding model
 
+Schematic project overview:
+
+![](./media/agentic-literature-review.png)
+
 ---
+
 
 ## 6. Data Flow
 

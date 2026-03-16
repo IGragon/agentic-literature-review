@@ -59,7 +59,7 @@ The proof-of-concept system demonstrates an **autonomous research pipeline**:
    - Queries external APIs (e.g. arXiv / Semantic Scholar)
 
 3. **Relevance filtering**
-   - Filters retrieved papers using embeddings
+   - Filters retrieved papers using embeddings or LLM
 
 4. **PDF parsing and summarization**
    - Extracts text from papers and produces structured summaries
