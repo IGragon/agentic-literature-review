@@ -3,19 +3,22 @@ from src.schemas import PaperSearchResult
 from src.utils import get_bibtex_from_doi
 
 from logging import getLogger
+from time import sleep
 
 logger = getLogger(__name__)
 
 
 class SearchEngine:
     def __init__(self):
-        self.client = arxiv.Client(
-            delay_seconds=4,
-            num_retries=3,
-        )
         self.max_results = 3
+        self.client = arxiv.Client(
+            delay_seconds=3,
+            num_retries=3,
+            page_size=self.max_results,
+        )
 
     def search(self, query: str) -> list[PaperSearchResult]:
+        sleep(3.1)
         logger.info(f"Search query: {query}")
         search = arxiv.Search(
             query=query,
@@ -37,7 +40,7 @@ class SearchEngine:
                 if result.doi != ""
                 else result.journal_ref,
             )
-            for result in search.results()
+            for result in self.client.results(search)
         ]
         logger.info(f"Retrieved: {len(parsed_results)} results")
         return parsed_results

@@ -1,5 +1,8 @@
 import streamlit as st
 from src.agentic_workflow import AgenticLiteratureReview
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 # ---------------------------------------------------------------------------
 # Page config
