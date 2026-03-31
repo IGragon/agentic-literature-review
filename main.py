@@ -5,7 +5,9 @@ import streamlit as st
 
 from src.agentic_workflow import AgenticLiteratureReview
 
-logging.basicConfig(level=logging.INFO)
+# basicConfig is a no-op when Streamlit has already configured the root logger.
+# Explicitly set the level on our loggers so INFO messages are visible.
+logging.getLogger("src").setLevel(logging.INFO)
 
 st.set_page_config(
     page_title="Agentic Literature Review",
