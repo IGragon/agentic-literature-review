@@ -1,12 +1,12 @@
-import streamlit as st
-from src.agentic_workflow import AgenticLiteratureReview
 import logging
+import time
 
-logging.basicConfig(level=logging.INFO)
+import streamlit as st
 
-# ---------------------------------------------------------------------------
-# Page config
-# ---------------------------------------------------------------------------
+from src.agentic_workflow import AgenticLiteratureReview
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
 st.set_page_config(
     page_title="Agentic Literature Review",
     page_icon="📚",
@@ -14,71 +14,27 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Sidebar — inputs & pipeline status
+# Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.title("📚 Literature Review")
+    st.title("Literature Review")
     st.caption("Agentic research assistant")
-
     st.divider()
 
     topic = st.text_area(
         "Research topic",
         placeholder="e.g. Prompt injection attacks in LLM agents",
-        height=100,
+        height=120,
     )
 
-    # with st.expander("Advanced settings", expanded=False):
-    #     max_papers = st.slider("Max papers", min_value=5, max_value=20, value=10)
-    #     max_iterations = st.slider("Max search iterations", min_value=1, max_value=3, value=2)
-
-    run_btn = st.button("▶ Run", type="primary", disabled=not topic.strip())
+    run_btn = st.button("▶ Run", type="primary", use_container_width=True, disabled=not topic.strip())
 
     st.divider()
-
-    st.subheader("Pipeline status")
-    status_placeholder = st.empty()
-
-# ---------------------------------------------------------------------------
-# Pipeline steps definition
-# ---------------------------------------------------------------------------
-STEPS = [
-    ("planning", "Topic planning"),
-    ("search", "Paper search"),
-    # ("filtering",    "Relevance filtering"),
-    # ("downloading",  "PDF download"),
-    # ("summarizing",  "Summarization"),
-    ("composing", "Review composition"),
-]
-
-ICONS = {"pending": "⬜", "running": "🔄", "done": "✅", "error": "❌"}
-
-
-def render_status(step_states: dict) -> str:
-    lines = []
-    for key, label in STEPS:
-        icon = ICONS[step_states.get(key, "pending")]
-        lines.append(f"{icon} {label}")
-    return "\n".join(lines)
-
-
-def pipeline(topic, **kwargs):
-    agentic_literature_review = AgenticLiteratureReview(
-        topic=topic,
-    )
-    for node_name, results in agentic_literature_review.run():
-        match node_name:
-            case "expand_topic":
-                yield "planning", results
-            case "search":
-                yield "search", results
-            case "compose_review":
-                yield "composing", results
-    return []
-
+    st.caption("Typical runtime: 60-90 seconds.")
+    st.caption("Searches arXiv and synthesizes results using an LLM.")
 
 # ---------------------------------------------------------------------------
-# Main content — rendered progressively on Run
+# Main
 # ---------------------------------------------------------------------------
 st.title("Agentic Literature Review Generator")
 
@@ -86,63 +42,101 @@ if not run_btn:
     st.info("Enter a research topic in the sidebar and click **▶ Run** to start.")
     st.stop()
 
-# Initialise step states
-step_states = {key: "pending" for key, _ in STEPS}
-status_placeholder.text(render_status(step_states))
+NODE_TO_STEP = {
+    "expand_topic": "planning",
+    "search": "search",
+    "compose_review": "composing",
+}
 
-results: dict = {}
 
-for step_key, result in pipeline(topic):
-    step_states[step_key] = "done"
-    results[step_key] = result
-    status_placeholder.text(render_status(step_states))
+def run_pipeline(topic):
+    alr = AgenticLiteratureReview(topic=topic)
+    for node_name, result in alr.run():
+        step = NODE_TO_STEP.get(node_name)
+        if step:
+            yield step, result
 
-    # ---- Research directions ----
-    if step_key == "planning":
-        st.subheader("🗺️ Research directions")
-        for i, d in enumerate(result["directions"], 1):
-            st.markdown(f"**{i}.** {d}")
 
-    # ---- Retrieved papers ----
-    elif step_key == "search":
-        st.subheader("🔍 Retrieved papers")
-        for p in result["search_results"]:
-            st.markdown(
-                f"- [{p['title']}]({p['url']}) — {p['authors']} ({p['published_date']})*"
+start = time.time()
+
+# Steps render in this container so they appear above the two-column area.
+steps_area = st.container()
+col_papers, col_review = st.columns([2, 3], gap="large")
+
+statuses = {}
+statuses["planning"] = steps_area.status("Expanding topic...", state="running", expanded=True)
+
+paper_count = 0
+
+try:
+    for step_key, result in run_pipeline(topic):
+
+        if step_key == "planning":
+            directions = result["directions"]
+            with statuses["planning"]:
+                for i, d in enumerate(directions, 1):
+                    st.markdown(f"**{i}.** {d}")
+            statuses["planning"].update(
+                label=f"Topic planning - {len(directions)} directions",
+                state="complete",
+                expanded=False,
+            )
+            statuses["search"] = steps_area.status("Searching arXiv...", state="running", expanded=True)
+
+        elif step_key == "search":
+            papers = result["search_results"]
+            paper_count = len(papers)
+            with statuses["search"]:
+                st.caption(f"Retrieved {paper_count} papers.")
+            statuses["search"].update(
+                label=f"Paper search - {paper_count} papers retrieved",
+                state="complete",
+                expanded=False,
             )
 
-    # # ---- Filtered papers ----
-    # elif step_key == "filtering":
-    #     st.subheader("✅ After relevance filtering")
-    #     rows = [
-    #         {"Title": p["title"], "Authors": p["authors"], "Year": p["year"],
-    #          "Relevance": f"{p['score']:.2f}", "URL": p["url"]}
-    #         for p in result["papers"]
-    #     ]
-    #     st.dataframe(rows, width="stretch")
+            with col_papers:
+                st.subheader("Retrieved papers")
+                for p in papers:
+                    with st.expander(p["title"]):
+                        st.caption(f"{p['authors']} · {p['published_date']}")
+                        st.write(p["abstract"])
+                        st.link_button("View on arXiv", p["url"])
+                        if p.get("citation"):
+                            with st.expander("BibTeX"):
+                                st.code(p["citation"], language="bibtex")
 
-    # # ---- Summaries ----
-    # elif step_key == "summarizing":
-    #     st.subheader("📝 Paper summaries")
-    #     for s in result["summaries"]:
-    #         with st.expander(s["title"]):
-    #             col1, col2 = st.columns(2)
-    #             with col1:
-    #                 st.markdown(f"**Problem:** {s['problem']}")
-    #                 st.markdown(f"**Method:** {s['method']}")
-    #             with col2:
-    #                 st.markdown(f"**Results:** {s['results']}")
-    #                 st.markdown(f"**Limitations:** {s['limitations']}")
+            statuses["composing"] = steps_area.status("Composing review...", state="running", expanded=True)
 
-    # ---- Literature review ----
-    elif step_key == "composing":
-        st.subheader("📄 Generated literature review")
-        st.markdown(result["review"])
-        st.download_button(
-            "⬇ Download review (.md)",
-            data=result["review"],
-            file_name="literature_review.md",
-            mime="text/markdown",
-        )
+        elif step_key == "composing":
+            review = result["review"]
+            elapsed = time.time() - start
+            statuses["composing"].update(
+                label="Review composition - complete",
+                state="complete",
+                expanded=False,
+            )
 
-st.success("Pipeline complete.")
+            with col_review:
+                st.subheader("Generated literature review")
+                st.markdown(review)
+                st.divider()
+                word_count = len(review.split())
+                st.caption(f"Generated in {elapsed:.0f}s - {word_count} words - {paper_count} papers")
+                st.download_button(
+                    "Download review (.md)",
+                    data=review,
+                    file_name="literature_review.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                )
+
+    st.success(f"Pipeline complete in {time.time() - start:.0f}s.")
+
+except Exception as e:
+    for s in statuses.values():
+        try:
+            s.update(state="error")
+        except Exception:
+            pass
+    st.error(f"Pipeline failed: {e}")
+    logging.exception("Pipeline error")
