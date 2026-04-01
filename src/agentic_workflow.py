@@ -67,15 +67,18 @@ def form_search_queries(state: State) -> dict:
 
 @wrap_logger
 def search(state: State) -> dict:
+    queries = state["search_queries"]
+    logger.info("search: running %d queries", len(queries))
     search_results = []
     paper_ids = set()
-    for query in state["search_queries"]:
+    for i, query in enumerate(queries, 1):
+        logger.info("search: query %d/%d — %r", i, len(queries), query)
         for result in SEARCH_ENGINE.search(query):
             if result["paper_id"] not in paper_ids:
                 search_results.append(result)
                 paper_ids.add(result["paper_id"])
+        logger.info("search: after query %d/%d total papers so far: %d", i, len(queries), len(search_results))
 
-    # print(search_results)
     return {"search_results": search_results}
 
 

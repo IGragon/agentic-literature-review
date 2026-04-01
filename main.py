@@ -5,7 +5,7 @@ import streamlit as st
 
 from src.agentic_workflow import AgenticLiteratureReview
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 st.set_page_config(
     page_title="Agentic Literature Review",
