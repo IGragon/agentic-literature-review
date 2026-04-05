@@ -172,7 +172,7 @@ External integrations:
 
 Schematic project overview:
 
-![](./media/agentic-literature-review.png)
+![](./diagrams/agentic-literature-review.png)
 
 ---
 

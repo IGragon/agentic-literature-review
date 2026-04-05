@@ -49,22 +49,22 @@ def _search_arxiv(query: str) -> list[PaperSearchResult]:
             sort_by=arxiv.SortCriterion.Relevance,
             sort_order=arxiv.SortOrder.Descending,
         )
-        for r in _arxiv_client.results(search):
-            arxiv_id = r.get_short_id()
+        for result in _arxiv_client.results(search):
+            arxiv_id = result.get_short_id()
             logger.info("arXiv fetching BibTeX for %s", arxiv_id)
-            if r.doi:
-                citation = get_bibtex_from_doi(r.doi)
+            if result.doi:
+                citation = get_bibtex_from_doi(result.doi)
             else:
                 citation = _fetch_arxiv_bibtex(arxiv_id)
             results.append(
                 PaperSearchResult(
-                    title=r.title,
-                    authors=", ".join(str(a) for a in r.authors),
-                    published_date=r.published.strftime("%Y-%m-%d"),
-                    abstract=r.summary,
-                    doi=r.doi or "",
-                    summary=r.summary,
-                    url=r.entry_id,
+                    title=result.title,
+                    authors=", ".join(str(a) for a in result.authors),
+                    published_date=result.published.strftime("%Y-%m-%d"),
+                    abstract=result.summary,
+                    doi=result.doi or "",
+                    summary=result.summary,
+                    url=result.entry_id,
                     paper_id=arxiv_id,
                     citation=citation,
                 )
