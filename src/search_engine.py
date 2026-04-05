@@ -5,7 +5,6 @@ import arxiv
 import requests
 from time import sleep
 from logging import getLogger
-from semanticscholar import SemanticScholar
 
 from src.schemas import PaperSearchResult
 from src.utils import get_bibtex_from_doi, reconstruct_abstract
@@ -73,78 +72,6 @@ def _search_arxiv(query: str) -> list[PaperSearchResult]:
     except Exception as e:
         logger.warning("arXiv search failed for %r: %s", query, e)
     logger.info("arXiv retrieved %d results in %.1fs", len(results), time.time() - t0)
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Semantic Scholar backend
-# ---------------------------------------------------------------------------
-
-_S2_ENABLED = os.getenv("SEMANTIC_SCHOLAR_ENABLED", "false").lower() == "true"
-
-# retry=False: fail fast on 429 instead of silently waiting up to 5 minutes
-_s2_client = SemanticScholar(retry=False) if _S2_ENABLED else None
-
-_S2_FIELDS = [
-    "title",
-    "authors",
-    "year",
-    "abstract",
-    "externalIds",
-    "citationStyles",
-    "openAccessPdf",
-    "url",
-]
-
-
-def _search_semantic_scholar(query: str) -> list[PaperSearchResult]:
-    if not _S2_ENABLED:
-        return []
-    logger.info("Semantic Scholar search starting: %r", query)
-    results = []
-    t0 = time.time()
-    try:
-        papers = _s2_client.search_paper(query, fields=_S2_FIELDS, limit=MAX_RESULTS)
-        logger.info("Semantic Scholar API responded in %.1fs", time.time() - t0)
-        for p in papers:
-            ext = p.externalIds or {}
-            arxiv_id = ext.get("ArXiv", "")
-            doi = ext.get("DOI") or ""
-
-            bibtex = (p.citationStyles or {}).get("bibtex")
-            if not bibtex:
-                logger.info("S2 no native BibTeX for %s, fetching via %s", p.paperId, "DOI" if doi else "arXiv ID" if arxiv_id else "none")
-                if doi:
-                    bibtex = get_bibtex_from_doi(doi)
-                elif arxiv_id:
-                    bibtex = _fetch_arxiv_bibtex(arxiv_id)
-
-            abstract = p.abstract or ""
-            oa_url = (p.openAccessPdf or {}).get("url", "")
-            url = (
-                oa_url
-                or (f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else "")
-                or p.url
-                or ""
-            )
-            paper_id = arxiv_id or f"s2:{p.paperId}"
-
-            results.append(
-                PaperSearchResult(
-                    title=p.title or "",
-                    authors=", ".join(a.name for a in (p.authors or [])),
-                    published_date=str(p.year) if p.year else "",
-                    abstract=abstract,
-                    doi=doi,
-                    summary=abstract,
-                    url=url,
-                    paper_id=paper_id,
-                    citation=bibtex,
-                )
-            )
-    except Exception as e:
-        logger.warning("Semantic Scholar search failed for %r after %.1fs: %s", query, time.time() - t0, e)
-    logger.info("Semantic Scholar retrieved %d results in %.1fs", len(results), time.time() - t0)
     return results
 
 
@@ -285,7 +212,7 @@ def _dedup_accept(
 
 class SearchEngine:
     def __init__(self):
-        active = ["arXiv", "OpenAlex"] + (["SemanticScholar"] if _S2_ENABLED else [])
+        active = ["arXiv", "OpenAlex"]
         logger.info("SearchEngine initialized, active backends: %s", active)
 
     def search(self, query: str) -> list[PaperSearchResult]:
@@ -297,7 +224,6 @@ class SearchEngine:
 
         for result in (
             _search_arxiv(query)
-            + _search_semantic_scholar(query)
             + _search_openalex(query)
         ):
             if _dedup_accept(result, seen_dois, seen_arxiv_ids):
