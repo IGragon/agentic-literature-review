@@ -1,6 +1,34 @@
 ## Key architecture decisions
 
+**1. OpenRouter as the LLM interface**
+Rather than committing to a single LLM provider, all LLM calls go through OpenRouter. This allows model swapping via config and enables a priority-ordered fallback list if a model is unavailable.
 
+**2. Search is a workflow stage, not an agentic tool**
+Article retrieval is a fixed pipeline stage (generate queries -> fetch -> deduplicate -> filter), not a tool the agent calls freely. This trades flexibility for predictability and cost control.
+
+**3. Dual-source retrieval with deduplication**
+Both arXiv and OpenAlex are queried for every search request. Results are deduplicated and merged to maximize recall while tolerating the failure of either source.
+
+**4. Tiered LLM-based relevance scoring**
+Relevance filtering uses four grades (NOT_REL, REL-, REL, REL+) rather than a binary pass/fail. This preserves borderline articles that might otherwise be discarded, and lets the system degrade gracefully when recall is low.
+
+**5. Iterative retrieval with LLM-eval recall check**
+The system reruns search up to N times if a self-evaluation step deems retrieved articles insufficient. Same retry loop applies to review composition. Hard iteration caps enforce the latency and cost constraints.
+
+**6. LaTeX as output format with compile-time validation**
+The review is composed and validated as LaTeX (with BibTeX), not plain text. A `compile_latex` tool provides a deterministic correctness signal (OK vs. ERROR + trace) that the agent can act on without hallucinating whether citations are valid.
+
+**7. Jinja2 prompt templates**
+All LLM prompts are Jinja2 templates, not hardcoded strings. This separates prompt logic from application code and makes iteration on prompts cheaper.
+
+**8. LangFuse for observability**
+Every session, LLM trace, step span, and tool call is tracked in LangFuse. This is essential for debugging iterative agentic workflows where failures may occur deep in a multi-step run.
+
+**9. Streamlit for the PoC UI**
+Streamlit is chosen for simplicity at PoC scale. It supports live workflow progress display and session history access without requiring a dedicated backend or frontend build step.
+
+**10. LLM Guard at the input boundary**
+User input is validated with LLM Guard before any workflow execution begins. This prevents adversarial or off-scope queries from consuming pipeline resources.
 
 ## Module list
 
