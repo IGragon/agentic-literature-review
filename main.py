@@ -1,9 +1,15 @@
 import logging
 import time
+import uuid
 
 import streamlit as st
 
-from src.agentic_workflow import AgenticLiteratureReview
+from src.agentic_workflow import (
+    AgenticLiteratureReview,
+    NoRelevantPapersFound,
+    set_search_progress_callback,
+    set_summarize_progress_callback,
+)
 from src.session_store import delete_session, list_sessions, load_session, make_session, save_session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -84,37 +90,58 @@ with st.sidebar:
         st.caption("No saved runs yet.")
 
     st.divider()
-    st.caption("Typical runtime: 60-90 seconds.")
-    st.caption("Searches arXiv and synthesizes results using an LLM.")
+    st.caption("Typical runtime: 2-4 minutes.")
+    st.caption("Searches arXiv, filters for relevance, and synthesizes results using an LLM.")
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_RELEVANCE_BADGE = {
+    "REL+": "🟢 REL+",
+    "REL":  "🔵 REL",
+    "REL-": "🟡 REL-",
+    "NOT_REL": "🔴 NOT_REL",
+    "":     "",
+}
+
 NODE_TO_STEP = {
-    "expand_topic": "planning",
-    "search": "search",
-    "compose_review": "composing",
+    "expand_topic":           "planning",
+    "search":                 "search",
+    "filter_relevance":       "filtering",
+    "evaluate_quality":       "evaluating",
+    "form_additional_queries": "retry_search",
+    "download_and_summarize": "summarizing",
+    "compose_review":         "composing",
 }
 
 
-def run_pipeline(t):
-    alr = AgenticLiteratureReview(topic=t)
+def run_pipeline(t: str, session_id: str):
+    alr = AgenticLiteratureReview(topic=t, session_id=session_id)
     for node_name, result in alr.run():
         step = NODE_TO_STEP.get(node_name)
         if step:
             yield step, result
 
 
-def display_results(papers, review, footer):
+def display_results(papers, review, footer, quality_warning=None):
+    if quality_warning:
+        st.warning(f"⚠️ Quality notice: {quality_warning}")
+
     col_papers, col_review = st.columns([2, 3], gap="large")
 
     with col_papers:
         st.subheader("Retrieved papers")
         for p in papers:
-            with st.expander(p["title"]):
+            badge = _RELEVANCE_BADGE.get(p.get("relevance", ""), "")
+            label = f"{badge}  {p['title']}" if badge else p["title"]
+            with st.expander(label):
                 st.caption(f"{p['authors']} · {p['published_date']}")
-                st.write(p["abstract"])
-                st.link_button("View on arXiv", p["url"])
+                if p.get("summary") and p["summary"] != p.get("abstract", ""):
+                    st.markdown(p["summary"])
+                else:
+                    st.write(p["abstract"])
+                st.link_button("View on arXiv / DOI", p["url"])
                 if p.get("citation"):
                     with st.expander("BibTeX"):
                         st.code(p["citation"], language="bibtex")
@@ -138,18 +165,61 @@ def display_results(papers, review, footer):
 # ---------------------------------------------------------------------------
 st.title("Agentic Literature Review Generator")
 
+def _open_search_status(steps_area, label: str, expanded: bool):
+    """Open a search status container with an inline progress bar. Returns (status, progress_placeholder)."""
+    status = steps_area.status(label, state="running", expanded=expanded)
+    with status:
+        progress_ph = st.empty()
+    return status, progress_ph
+
+
+def _register_search_progress(progress_ph):
+    """Register a callback that updates *progress_ph* on each query."""
+    def _cb(current: int, total: int, query: str) -> None:
+        if total > 0:
+            progress_ph.progress(
+                current / total,
+                text=f"Query {current} / {total} — *{query[:90]}*",
+            )
+    set_search_progress_callback(_cb)
+
+
+def _open_summarize_status(steps_area):
+    """Open summarize status container with an inline progress bar. Returns (status, progress_placeholder)."""
+    status = steps_area.status("Downloading & summarizing papers...", state="running", expanded=True)
+    with status:
+        progress_ph = st.empty()
+    return status, progress_ph
+
+
+def _register_summarize_progress(progress_ph):
+    """Register a callback that updates *progress_ph* on each paper."""
+    def _cb(current: int, total: int, title: str) -> None:
+        if total > 0:
+            progress_ph.progress(
+                current / total,
+                text=f"Paper {current} / {total} — *{title[:80]}*",
+            )
+    set_summarize_progress_callback(_cb)
+
+
 if run_btn:
     start = time.time()
+    session_id = str(uuid.uuid4())
     steps_area = st.container()
-    statuses = {}
+    statuses: dict[str, st.delta_generator.DeltaGenerator] = {}
     statuses["planning"] = steps_area.status("Expanding topic...", state="running", expanded=True)
 
     directions_saved = None
     papers_saved = None
     review_saved = None
+    quality_warning_saved = None
+    search_count = 0
+    _search_progress_ph = None   # progress placeholder for current search status
+    _summ_progress_ph = None     # progress placeholder for summarize status
 
     try:
-        for step_key, result in run_pipeline(topic):
+        for step_key, result in run_pipeline(topic, session_id):
 
             if step_key == "planning":
                 directions_saved = result["directions"]
@@ -157,18 +227,70 @@ if run_btn:
                     for i, d in enumerate(directions_saved, 1):
                         st.markdown(f"**{i}.** {d}")
                 statuses["planning"].update(
-                    label=f"Topic planning - {len(directions_saved)} directions",
+                    label=f"Topic planning — {len(directions_saved)} directions",
                     state="complete",
                     expanded=False,
                 )
-                statuses["search"] = steps_area.status("Searching arXiv...", state="running", expanded=True)
+                statuses["search"], _search_progress_ph = _open_search_status(
+                    steps_area, "Searching arXiv and OpenAlex...", expanded=True
+                )
+                _register_search_progress(_search_progress_ph)
+                search_count = 1
 
             elif step_key == "search":
-                papers_saved = result["search_results"]
-                with statuses["search"]:
-                    st.caption(f"Retrieved {len(papers_saved)} papers.")
+                set_search_progress_callback(None)
+                papers_saved = result.get("search_results") or []
                 statuses["search"].update(
-                    label=f"Paper search - {len(papers_saved)} papers retrieved",
+                    label=f"Paper search (iteration {search_count}) — {len(papers_saved)} papers",
+                    state="complete",
+                    expanded=False,
+                )
+                statuses["filtering"] = steps_area.status("Filtering for relevance...", state="running", expanded=False)
+
+            elif step_key == "filtering":
+                papers_saved = result.get("search_results") or []
+                rel_plus = sum(1 for p in papers_saved if p.get("relevance") == "REL+")
+                rel = sum(1 for p in papers_saved if p.get("relevance") == "REL")
+                rel_minus = sum(1 for p in papers_saved if p.get("relevance") == "REL-")
+                statuses["filtering"].update(
+                    label=f"Relevance filtering — {len(papers_saved)} papers kept (REL+:{rel_plus} REL:{rel} REL-:{rel_minus})",
+                    state="complete",
+                    expanded=False,
+                )
+                statuses["evaluating"] = steps_area.status("Evaluating coverage...", state="running", expanded=False)
+
+            elif step_key == "evaluating":
+                quality_warning_saved = result.get("quality_warning")
+                quality_ok = result.get("quality_ok")
+                if quality_ok:
+                    statuses["evaluating"].update(
+                        label="Coverage evaluation — quality OK",
+                        state="complete",
+                        expanded=False,
+                    )
+                    statuses["summarizing"], _summ_progress_ph = _open_summarize_status(steps_area)
+                    _register_summarize_progress(_summ_progress_ph)
+                else:
+                    statuses["evaluating"].update(
+                        label="Coverage evaluation — insufficient, retrying...",
+                        state="complete",
+                        expanded=False,
+                    )
+
+            elif step_key == "retry_search":
+                search_count += 1
+                statuses["search"], _search_progress_ph = _open_search_status(
+                    steps_area,
+                    f"Searching for more papers (iteration {search_count})...",
+                    expanded=True,
+                )
+                _register_search_progress(_search_progress_ph)
+
+            elif step_key == "summarizing":
+                set_summarize_progress_callback(None)
+                papers_saved = result.get("search_results") or []
+                statuses["summarizing"].update(
+                    label=f"Summarization — {len(papers_saved)} papers summarized",
                     state="complete",
                     expanded=False,
                 )
@@ -178,22 +300,38 @@ if run_btn:
                 review_saved = result["review"]
                 elapsed = time.time() - start
                 statuses["composing"].update(
-                    label="Review composition - complete",
+                    label="Review composition — complete",
                     state="complete",
                     expanded=False,
                 )
                 word_count = len(review_saved.split())
-                footer = f"Generated in {elapsed:.0f}s - {word_count} words - {len(papers_saved)} papers"
-                display_results(papers_saved, review_saved, footer)
+                footer = f"Generated in {elapsed:.0f}s · {word_count} words · {len(papers_saved)} papers"
+                display_results(papers_saved, review_saved, footer, quality_warning_saved)
 
         st.success(f"Pipeline complete in {time.time() - start:.0f}s.")
 
         if directions_saved and papers_saved and review_saved:
-            session = make_session(topic, directions_saved, papers_saved, review_saved)
+            session = make_session(
+                topic,
+                directions_saved,
+                papers_saved,
+                review_saved,
+                session_id=session_id,
+                quality_warning=quality_warning_saved,
+            )
             save_session(session)
             st.session_state.loaded_session_id = session.id
             st.session_state.new_topic_mode = False
             st.rerun()
+
+    except NoRelevantPapersFound as e:
+        for s in statuses.values():
+            try:
+                s.update(state="error")
+            except Exception:
+                pass
+        st.error(f"No relevant papers found: {e}")
+        logging.exception("No papers found")
 
     except Exception as e:
         for s in statuses.values():
@@ -210,8 +348,13 @@ elif st.session_state.loaded_session_id:
         date_str = session.created_at[:16].replace("T", " ")
         st.info(f"Saved run: **{session.name}** ({date_str})")
         word_count = len(session.review.split())
-        footer = f"{word_count} words - {len(session.search_results)} papers - saved {date_str}"
-        display_results(session.search_results, session.review, footer)
+        footer = f"{word_count} words · {len(session.search_results)} papers · saved {date_str}"
+        display_results(
+            session.search_results,
+            session.review,
+            footer,
+            getattr(session, "quality_warning", None),
+        )
     except Exception as e:
         st.error(f"Failed to load session: {e}")
         st.session_state.loaded_session_id = None
