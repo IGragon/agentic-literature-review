@@ -1,6 +1,6 @@
 import json
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -16,18 +16,27 @@ class Session:
     directions: list
     search_results: list
     review: str
+    quality_warning: str | None = field(default=None)
 
 
-def make_session(topic: str, directions: list, search_results: list, review: str) -> Session:
+def make_session(
+    topic: str,
+    directions: list,
+    search_results: list,
+    review: str,
+    session_id: str | None = None,
+    quality_warning: str | None = None,
+) -> Session:
     name = topic[:50].strip() + ("..." if len(topic) > 50 else "")
     return Session(
-        id=str(uuid.uuid4()),
+        id=session_id or str(uuid.uuid4()),
         name=name,
         topic=topic,
         created_at=datetime.now().isoformat(),
         directions=directions,
         search_results=list(search_results),
         review=review,
+        quality_warning=quality_warning,
     )
 
 
