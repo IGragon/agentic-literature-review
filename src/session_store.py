@@ -1,4 +1,5 @@
 import json
+import shutil
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -18,10 +19,16 @@ class Session:
     review: str
 
 
-def make_session(topic: str, directions: list, search_results: list, review: str) -> Session:
+def make_session(
+    topic: str,
+    directions: list,
+    search_results: list,
+    review: str,
+    session_id: str | None = None,
+) -> Session:
     name = topic[:50].strip() + ("..." if len(topic) > 50 else "")
     return Session(
-        id=str(uuid.uuid4()),
+        id=session_id or str(uuid.uuid4()),
         name=name,
         topic=topic,
         created_at=datetime.now().isoformat(),
@@ -31,7 +38,8 @@ def make_session(topic: str, directions: list, search_results: list, review: str
     )
 
 
-def save_session(session: Session) -> None:
+def save_session(session: Session, pdf_path: str | None = None) -> None:
+    # pdf_path param kept for signature compatibility but unused — PDF lives at sessions/{id}/review.pdf
     SESSIONS_DIR.mkdir(exist_ok=True)
     path = SESSIONS_DIR / f"{session.id}.json"
     path.write_text(json.dumps(asdict(session), indent=2, ensure_ascii=False))
@@ -57,7 +65,26 @@ def list_sessions() -> list:
     return sessions
 
 
+def get_session_pdf_path(session_id: str) -> str | None:
+    # Primary location: sessions/{id}/review.pdf (Code-Act working dir)
+    new_path = SESSIONS_DIR / session_id / "review.pdf"
+    if new_path.exists():
+        return str(new_path)
+    # Legacy fallback: sessions/{id}.pdf
+    legacy_path = SESSIONS_DIR / f"{session_id}.pdf"
+    return str(legacy_path) if legacy_path.exists() else None
+
+
 def delete_session(session_id: str) -> None:
-    path = SESSIONS_DIR / f"{session_id}.json"
-    if path.exists():
-        path.unlink()
+    # Remove JSON metadata
+    json_path = SESSIONS_DIR / f"{session_id}.json"
+    if json_path.exists():
+        json_path.unlink()
+    # Remove session working directory (LaTeX files, PDF, latexmk artifacts)
+    session_dir = SESSIONS_DIR / session_id
+    if session_dir.exists():
+        shutil.rmtree(session_dir)
+    # Remove legacy PDF if present
+    legacy_pdf = SESSIONS_DIR / f"{session_id}.pdf"
+    if legacy_pdf.exists():
+        legacy_pdf.unlink()
