@@ -3,8 +3,9 @@
 import pytest
 
 from src.prompts import (
+    AGENT_SYSTEM_PROMPT,
     PROMPT_ADDITIONAL_QUERIES,
-    PROMPT_COMPOSE_REVIEW,
+    PROMPT_COMPOSE_AGENT_TASK,
     PROMPT_CONSTRUCT_SEARCH_QUERIES,
     PROMPT_EXPAND_TOPIC,
     PROMPT_RELEVANCE_FILTER,
@@ -175,35 +176,51 @@ def test_additional_queries_renders_paper_relevance(papers, directions):
 
 
 # ---------------------------------------------------------------------------
-# PROMPT_COMPOSE_REVIEW
+# AGENT_SYSTEM_PROMPT / PROMPT_COMPOSE_AGENT_TASK
 # ---------------------------------------------------------------------------
 
 
-def test_compose_review_renders_papers(papers, directions):
-    rendered = PROMPT_COMPOSE_REVIEW.render(
+def test_agent_system_prompt_contains_tool_names():
+    assert "write_bibliography" in AGENT_SYSTEM_PROMPT
+    assert "write_latex" in AGENT_SYSTEM_PROMPT
+    assert "compile" in AGENT_SYSTEM_PROMPT
+
+
+def test_compose_agent_task_renders_papers(papers, directions):
+    papers_with_keys = [{**p, "bibtex_key": p["paper_id"]} for p in papers]
+    rendered = PROMPT_COMPOSE_AGENT_TASK.render(
         topic="Transformer models",
         directions=directions,
-        search_results=papers,
+        papers=papers_with_keys,
+        bibliography="@article{vaswani2017}",
+        feedback=None,
     )
     assert "Transformer models" in rendered
     assert "Attention Is All You Need" in rendered
     assert "BERT" in rendered
 
 
-def test_compose_review_renders_summaries(papers, directions):
-    rendered = PROMPT_COMPOSE_REVIEW.render(
+def test_compose_agent_task_renders_bibtex_keys(papers, directions):
+    papers_with_keys = [{**p, "bibtex_key": p["paper_id"]} for p in papers]
+    rendered = PROMPT_COMPOSE_AGENT_TASK.render(
         topic="NLP",
         directions=directions,
-        search_results=papers,
+        papers=papers_with_keys,
+        bibliography="@article{vaswani2017}",
+        feedback=None,
     )
-    assert "Problem: seq2seq" in rendered
+    assert "2401.00001" in rendered
+    assert "openalex:W9876" in rendered
 
 
-def test_compose_review_renders_review_tags(papers, directions):
-    rendered = PROMPT_COMPOSE_REVIEW.render(
+def test_compose_agent_task_includes_feedback_when_set(papers, directions):
+    papers_with_keys = [{**p, "bibtex_key": p["paper_id"]} for p in papers]
+    rendered = PROMPT_COMPOSE_AGENT_TASK.render(
         topic="NLP",
         directions=directions,
-        search_results=papers,
+        papers=papers_with_keys,
+        bibliography="",
+        feedback="Missing section on pre-training.",
     )
-    assert "<review>" in rendered
-    assert "</review>" in rendered
+    assert "REVISION REQUIRED" in rendered
+    assert "Missing section on pre-training." in rendered

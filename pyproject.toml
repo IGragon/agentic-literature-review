@@ -13,8 +13,9 @@ dependencies = [
     "langchain-openrouter>=0.1.0",
     "langfuse>=4.0.0",
     "langgraph>=1.1.2",
-    "streamlit>=1.55.0",
     "pypdf>=4.0",
+    "streamlit>=1.55.0",
+    "streamlit-pdf-viewer>=0.0.28",
 ]
 
 [dependency-groups]
