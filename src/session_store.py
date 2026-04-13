@@ -1,7 +1,7 @@
 import json
 import shutil
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +17,7 @@ class Session:
     directions: list
     search_results: list
     review: str
+    quality_warning: str | None = field(default=None)
 
 
 def make_session(
@@ -25,6 +26,7 @@ def make_session(
     search_results: list,
     review: str,
     session_id: str | None = None,
+    quality_warning: str | None = None,
 ) -> Session:
     name = topic[:50].strip() + ("..." if len(topic) > 50 else "")
     return Session(
@@ -35,6 +37,7 @@ def make_session(
         directions=directions,
         search_results=list(search_results),
         review=review,
+        quality_warning=quality_warning,
     )
 
 

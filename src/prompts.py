@@ -34,6 +34,84 @@ Search queries for arXiv:
 """)
 
 
+PROMPT_RELEVANCE_FILTER = env.from_string("""
+You are evaluating research papers for a literature review. Assign a relevance label to each paper.
+
+Topic: {{topic}}
+
+Research directions:
+{% for direction in directions %}
+- {{direction}}
+{% endfor %}
+
+Relevance labels:
+- NOT_REL: not relevant to the topic and research directions at all
+- REL-: tangentially related but provides little direct value for this literature review
+- REL: clearly relevant and useful for this literature review
+- REL+: highly relevant and significant; a key paper for this topic
+
+Papers to evaluate (use the exact paper_id in your response):
+{% for paper in papers %}
+[{{paper.paper_id}}]
+Title: {{paper.title}}
+Abstract: {{paper.abstract}}
+
+{% endfor %}
+
+Return a relevance score for EVERY paper listed above. Use the exact paper_id values shown in brackets.
+""")
+
+
+PROMPT_ADDITIONAL_QUERIES = env.from_string("""
+You are helping conduct a literature review. The current set of retrieved papers is insufficient — there are not enough highly relevant papers.
+
+Topic: {{topic}}
+
+Research directions:
+{% for direction in directions %}
+- {{direction}}
+{% endfor %}
+
+Papers found so far (with relevance grades):
+{% for paper in papers %}
+- [{{paper.relevance}}] {{paper.title}}
+{% endfor %}
+
+Search queries already used:
+{% for q in previous_queries %}
+- {{q}}
+{% endfor %}
+
+Generate 3-5 NEW search queries for arXiv that would find additional relevant papers. Focus on research directions that are underrepresented in the papers found so far. Do NOT repeat queries already used.
+
+New search queries:
+""")
+
+
+PROMPT_SUMMARIZE_PAPER = env.from_string("""
+Summarize the following research paper for use in a literature review. Extract the key information in four sections:
+
+**Problem**: What specific problem or research question does this paper address?
+**Method**: What approach, technique, or methodology is proposed or used?
+**Results**: What are the main findings, contributions, or outcomes?
+**Limitations**: What limitations, open questions, or future work are mentioned?
+
+Keep each section to 2-3 concise, precise sentences. Use technical language appropriate for an academic audience.
+
+Paper title: {{title}}
+
+{% if full_text %}
+Full paper text (excerpt):
+{{full_text}}
+{% else %}
+Abstract:
+{{abstract}}
+{% endif %}
+
+Summary:
+""")
+
+
 # ---------------------------------------------------------------------------
 # Code-Act compose agent prompts
 # ---------------------------------------------------------------------------
@@ -123,7 +201,7 @@ Begin now. Call write_bibliography() first.
 
 
 # ---------------------------------------------------------------------------
-# Evaluate-review prompt (unchanged from prior version)
+# Evaluate-review prompt
 # ---------------------------------------------------------------------------
 
 PROMPT_EVALUATE_REVIEW = env_noesc.from_string("""
