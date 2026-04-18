@@ -12,6 +12,14 @@ from langchain_openrouter import ChatOpenRouter
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 
+from src.observability import (
+    end_span,
+    end_session,
+    log_event,
+    start_span,
+    start_session,
+    traced_invoke,
+)
 from src.prompts import (
     AGENT_SYSTEM_PROMPT,
     PROMPT_ADDITIONAL_QUERIES,
@@ -36,6 +44,7 @@ MAX_REVIEW_ITERATIONS = int(os.getenv("MAX_REVIEW_ITERATIONS", "3"))
 MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "10"))
 MIN_REL_PAPERS = int(os.getenv("MIN_REL_PAPERS", "3"))
 MAX_SEARCH_ITERATIONS = int(os.getenv("MAX_SEARCH_ITERATIONS", "3"))
+SKIP_REL_MINUS_DOWNLOAD = os.getenv("SKIP_REL_MINUS_DOWNLOAD", "true").lower() in ("true", "1", "yes")
 
 SEARCH_ENGINE = SearchEngine()
 
@@ -74,8 +83,22 @@ def get_llm() -> ChatOpenRouter:
 def wrap_logger(func):
     def wrapper(*args, **kwargs):
         logger.info(f"Running {func.__name__}")
-        return func(*args, **kwargs)
+        span = start_span(func.__name__, input_data={"args": str(args)[:500]})
+        try:
+            result = func(*args, **kwargs)
+            if span is not None:
+                end_span(span, output=_span_output(result))
+            return result
+        except Exception:
+            if span is not None:
+                end_span(span)
+            raise
     return wrapper
+
+
+def _span_output(result: dict) -> dict:
+    keys = list(result.keys()) if isinstance(result, dict) else []
+    return {k: type(result[k]).__name__ for k in keys[:5]}
 
 
 _TRANSIENT_ERROR_NAMES = {
@@ -116,8 +139,10 @@ def _invoke_with_retry(llm: ChatOpenRouter, prompt: str, max_retries: int = 3) -
 @wrap_logger
 def expand_topic(state: State) -> dict:
     llm_with_structure = get_llm().with_structured_output(Directions)
-    result = llm_with_structure.invoke(
+    result = traced_invoke(
+        llm_with_structure,
         PROMPT_EXPAND_TOPIC.render(topic=state["topic"]),
+        name="expand_topic_llm",
     )
     return {"directions": result["directions"]}
 
@@ -125,11 +150,13 @@ def expand_topic(state: State) -> dict:
 @wrap_logger
 def form_search_queries(state: State) -> dict:
     llm_with_structure = get_llm().with_structured_output(SearchQueries)
-    result = llm_with_structure.invoke(
+    result = traced_invoke(
+        llm_with_structure,
         PROMPT_CONSTRUCT_SEARCH_QUERIES.render(
             topic=state["topic"],
             directions=state["directions"],
         ),
+        name="form_search_queries_llm",
     )
     return {"search_queries": result["search_queries"]}
 
@@ -175,12 +202,14 @@ def filter_relevance(state: State) -> dict:
         paper["completeness_score"] = _compute_completeness(paper)
 
     llm_with_structure = get_llm().with_structured_output(RelevanceScores)
-    scores_result = llm_with_structure.invoke(
+    scores_result = traced_invoke(
+        llm_with_structure,
         PROMPT_RELEVANCE_FILTER.render(
             topic=state["topic"],
             directions=state["directions"],
             papers=papers,
-        )
+        ),
+        name="filter_relevance_llm",
     )
 
     score_map: dict[str, str] = {
@@ -253,13 +282,15 @@ def _route_after_quality(state: State) -> str:
 @wrap_logger
 def form_additional_queries(state: State) -> dict:
     llm_with_structure = get_llm().with_structured_output(SearchQueries)
-    result = llm_with_structure.invoke(
+    result = traced_invoke(
+        llm_with_structure,
         PROMPT_ADDITIONAL_QUERIES.render(
             topic=state["topic"],
             directions=state["directions"],
             papers=state.get("search_results") or [],
             previous_queries=state.get("search_queries") or [],
-        )
+        ),
+        name="form_additional_queries_llm",
     )
     new_queries = result["search_queries"]
     logger.info("form_additional_queries: generated %d new queries", len(new_queries))
@@ -285,27 +316,34 @@ def download_and_summarize(state: State) -> dict:
         arxiv_id = None if pid.startswith("openalex:") else pid
 
         full_text = None
-        if arxiv_id:
+        if arxiv_id and not (SKIP_REL_MINUS_DOWNLOAD and paper.get("relevance") == "REL-"):
             base_id = _ARXIV_VERSION_RE.sub("", arxiv_id)
             safe_name = base_id.replace("/", "_")
             pdf_path = pdf_dir / f"{safe_name}.pdf"
             if not pdf_path.exists():
                 download_arxiv_pdf(base_id, pdf_path)
+                log_event("pdf_download", input_data={"arxiv_id": base_id},
+                          output={"success": pdf_path.exists()})
             if pdf_path.exists():
                 full_text = extract_pdf_text(pdf_path)
+                log_event("pdf_extract", input_data={"arxiv_id": base_id},
+                          output={"chars": len(full_text)})
+        elif arxiv_id and SKIP_REL_MINUS_DOWNLOAD and paper.get("relevance") == "REL-":
+            logger.info("summarize: skipping download for REL- paper %s", pid)
 
         if full_text:
             logger.info("summarize: using full text for %s (%d chars)", pid, len(full_text))
         else:
             logger.info("summarize: using abstract fallback for %s", pid)
 
-        summary = _invoke_with_retry(
+        summary = traced_invoke(
             llm,
             PROMPT_SUMMARIZE_PAPER.render(
                 title=paper["title"],
                 full_text=full_text,
                 abstract=paper["abstract"],
             ),
+            name=f"summarize_{pid[:30]}",
         ).content.strip()
 
         updated_papers.append({**paper, "summary": summary})
@@ -355,7 +393,9 @@ def compose_review_latex(state: State) -> dict:
 
     # Code-Act loop: LLM calls tools, observes results, iterates until done or limit hit.
     for step in range(MAX_AGENT_STEPS):
-        response = llm_with_tools.invoke(messages)
+        response = traced_invoke(
+            llm_with_tools, messages, name=f"compose_step_{step + 1}",
+        )
         messages.append(response)
 
         if not response.tool_calls:
@@ -365,6 +405,8 @@ def compose_review_latex(state: State) -> dict:
         for tc in response.tool_calls:
             logger.info("compose_review_latex: step %d tool=%s", step + 1, tc["name"])
             result = tool_map[tc["name"]].invoke(tc["args"])
+            log_event(f"tool_{tc['name']}", input_data=tc["args"],
+                      output=str(result)[:500])
             logger.info("compose_review_latex: result preview: %s", str(result)[:200])
             messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
     else:
@@ -389,12 +431,14 @@ def compose_review_latex(state: State) -> dict:
 def evaluate_review(state: State) -> dict:
     llm_with_structure = get_llm().with_structured_output(ReviewEvaluation)
 
-    result = llm_with_structure.invoke(
+    result = traced_invoke(
+        llm_with_structure,
         PROMPT_EVALUATE_REVIEW.render(
             topic=state["topic"],
             directions=state["directions"],
             review=state["review"],
-        )
+        ),
+        name="evaluate_review_llm",
     )
 
     remaining = state["review_iterations_remaining"]
@@ -473,10 +517,16 @@ class AgenticLiteratureReview:
         return workflow.compile()
 
     def run(self):
-        for chunk in self._stream():
-            if chunk["type"] == "updates":
-                for node_name, state in chunk["data"].items():
-                    yield node_name, state
+        start_session(self.initial_state["topic"], self.initial_state["session_id"])
+        try:
+            for chunk in self._stream():
+                if chunk["type"] == "updates":
+                    for node_name, state in chunk["data"].items():
+                        yield node_name, state
+        except Exception:
+            end_session()
+            raise
+        end_session(output={"topic": self.initial_state["topic"]})
 
     def _stream(self):
         return self.flow.stream(

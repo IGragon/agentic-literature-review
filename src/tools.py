@@ -37,6 +37,62 @@ def read_bibliography(path: str) -> str:
         return f.read()
 
 
+def _extract_log_errors(dir_path: str, tex_name: str) -> str:
+    log_path = os.path.join(dir_path, tex_name.replace(".tex", ".log"))
+    if os.path.exists(log_path):
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            log_lines = f.readlines()
+        error_lines = [l.rstrip() for l in log_lines if l.startswith("!") or l.startswith("l.")]
+        return "\n".join(error_lines[:80])
+    return ""
+
+
+def _run_pdflatex(tex_path: str) -> dict:
+    """Run pdflatex + bibtex passes on tex_path.
+
+    Returns {"status": "OK"} on success or {"status": "ERROR", "trace": str} on failure.
+    Expects references.bib to exist in the same directory as tex_path.
+    """
+    dir_path = os.path.dirname(tex_path)
+    tex_name = os.path.basename(tex_path)
+
+    def _run(cmd: list[str]) -> subprocess.CompletedProcess | None:
+        try:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=dir_path,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        except Exception as exc:
+            logger.warning("pdflatex step failed: %s", exc)
+            return None
+
+    # pdflatex (1st pass) -> bibtex -> pdflatex (2nd pass) -> pdflatex (3rd pass)
+    steps = [
+        ["pdflatex", "-interaction=nonstopmode", tex_name],
+        ["bibtex", tex_name.replace(".tex", "")],
+        ["pdflatex", "-interaction=nonstopmode", tex_name],
+        ["pdflatex", "-interaction=nonstopmode", tex_name],
+    ]
+
+    for step_cmd in steps:
+        result = _run(step_cmd)
+        if result is None:
+            return {"status": "ERROR", "trace": f"{' '.join(step_cmd)} timed out after 60s"}
+        # bibtex may return non-zero for warnings; only fail on pdflatex errors
+        if result.returncode != 0 and step_cmd[0] == "pdflatex":
+            trace = _extract_log_errors(dir_path, tex_name)
+            if not trace:
+                trace = result.stdout[-3000:] if result.stdout else result.stderr[-3000:]
+            return {"status": "ERROR", "trace": trace}
+
+    return {"status": "OK"}
+
+
 def _run_latexmk(tex_path: str) -> dict:
     """Run latexmk on tex_path (handles pdflatex + bibtex passes).
 
@@ -56,21 +112,15 @@ def _run_latexmk(tex_path: str) -> dict:
         )
     except subprocess.TimeoutExpired:
         return {"status": "ERROR", "trace": "latexmk timed out after 120s"}
+    except FileNotFoundError:
+        return {"status": "ERROR", "trace": "latexmk not found on PATH"}
     except Exception as exc:
         return {"status": "ERROR", "trace": str(exc)}
 
     if result.returncode == 0:
         return {"status": "OK"}
 
-    # Extract error lines from log file (more structured than stdout)
-    log_path = os.path.join(dir_path, tex_name.replace(".tex", ".log"))
-    trace = ""
-    if os.path.exists(log_path):
-        with open(log_path, encoding="utf-8", errors="replace") as f:
-            log_lines = f.readlines()
-        error_lines = [l.rstrip() for l in log_lines if l.startswith("!") or l.startswith("l.")]
-        trace = "\n".join(error_lines[:80])
-
+    trace = _extract_log_errors(dir_path, tex_name)
     if not trace:
         trace = result.stdout[-3000:] if result.stdout else result.stderr[-3000:]
 
@@ -78,8 +128,21 @@ def _run_latexmk(tex_path: str) -> dict:
 
 
 def compile_latex(tex_path: str) -> dict:
-    """Public wrapper around _run_latexmk. Used in tests and direct calls."""
-    return _run_latexmk(tex_path)
+    """Compile a LaTeX document, using pdflatex first and latexmk as fallback."""
+    result = _run_pdflatex(tex_path)
+    if result["status"] == "OK":
+        return result
+
+    logger.info("pdflatex failed, trying latexmk as fallback")
+    fallback = _run_latexmk(tex_path)
+    if fallback["status"] == "OK":
+        return fallback
+
+    # Both failed — return the pdflatex errors (primary) with fallback info appended
+    return {
+        "status": "ERROR",
+        "trace": f"[pdflatex] {result['trace']}\n\n[latexmk] {fallback['trace']}",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -134,13 +197,13 @@ def make_latex_tools(session_dir: str) -> list:
 
     @lc_tool
     def compile(dummy: str = "") -> str:
-        """Compile review.tex using latexmk (handles pdflatex + bibtex passes).
+        """Compile review.tex to PDF (pdflatex + bibtex, with latexmk fallback).
         Returns 'OK - PDF generated.' on success.
         Returns 'ERROR:\\n{trace}' on failure - read the relevant file to diagnose."""
         tex_path = os.path.join(session_dir, "review.tex")
         if not os.path.exists(tex_path):
             return "ERROR: review.tex does not exist. Call write_latex() first."
-        result = _run_latexmk(tex_path)
+        result = compile_latex(tex_path)
         if result["status"] == "OK":
             return "OK - PDF generated."
         return f"ERROR:\n{result['trace']}"

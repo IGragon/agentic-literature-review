@@ -6,6 +6,7 @@ import requests
 from time import sleep
 from logging import getLogger
 
+from src.observability import log_event
 from src.schemas import PaperSearchResult
 from src.utils import get_bibtex_from_doi, reconstruct_abstract
 
@@ -71,7 +72,10 @@ def _search_arxiv(query: str) -> list[PaperSearchResult]:
             )
     except Exception as e:
         logger.warning("arXiv search failed for %r: %s", query, e)
-    logger.info("arXiv retrieved %d results in %.1fs", len(results), time.time() - t0)
+    elapsed = time.time() - t0
+    logger.info("arXiv retrieved %d results in %.1fs", len(results), elapsed)
+    log_event("arxiv_search", input_data={"query": query},
+              output={"results": len(results), "elapsed_s": round(elapsed, 1)})
     return results
 
 
@@ -166,8 +170,12 @@ def _search_openalex(query: str) -> list[PaperSearchResult]:
                 )
             )
     except Exception as e:
-        logger.warning("OpenAlex search failed for %r after %.1fs: %s", query, time.time() - t0, e)
-    logger.info("OpenAlex retrieved %d results in %.1fs", len(results), time.time() - t0)
+        elapsed = time.time() - t0
+        logger.warning("OpenAlex search failed for %r after %.1fs: %s", query, elapsed, e)
+    elapsed = time.time() - t0
+    logger.info("OpenAlex retrieved %d results in %.1fs", len(results), elapsed)
+    log_event("openalex_search", input_data={"query": query},
+              output={"results": len(results), "elapsed_s": round(elapsed, 1)})
     return results
 
 
