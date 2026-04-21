@@ -136,7 +136,7 @@ Failure modes:
 ## Technical and operational constraints
 
 **Latency:**
-Less than 5 minutes per literature review
+Less than 15 minutes per literature review
 
 **Cost**
 Less than 1$ per literature review

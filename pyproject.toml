@@ -22,7 +22,11 @@ dependencies = [
 dev = [
     "pytest>=9.0.3",
     "pytest-mock>=3.15.1",
+    "deepeval>=3.9.7",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "e2e: end-to-end evaluation tests (expensive, requires API access)",
+]

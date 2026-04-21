@@ -20,8 +20,25 @@ There we measure Recall and Precision of articles retrieved by workflow (before 
 
 ### End-to-End assessment
 
-For end-to-end assessment DeepEval is used to evaluate the resulting article based on provided "grading criteria" that assesses language, formatting, soundness. (TBD when real prompt for DeepEval will be composed)
+For end-to-end assessment DeepEval is used to evaluate the resulting literature review.
 
-As inputs we use a list of topics for literature review.
+**Inputs:** a list of topics for literature review (stored in `evals/dataset.json`).
 
-There we measure average grade
+**Metrics (3):**
+
+1. **Faithfulness** (`FaithfulnessMetric`, threshold=0.7) — Checks whether the review is grounded in the paper summaries (retrieval context). Measures internal consistency: claims in the review should be supported by the source paper summaries, not hallucinated.
+
+2. **Coherence** (`GEval`, threshold=0.7) — Custom LLM-as-a-Judge metric evaluating logical flow and academic writing quality. Criteria: structure (proper sections), flow (smooth transitions), synthesis (comparing papers vs. listing them), clarity (academic language), completeness relative to topic and research directions.
+
+3. **Citation Correctness** (`GEval`, threshold=0.7) — Custom LLM-as-a-Judge metric evaluating citation usage. Criteria: proper `\cite{key}` format, all papers cited at least once, no fabricated citation keys, accurate attribution of claims to cited papers, bibliography completeness.
+
+**Evaluation flow:**
+- Each topic runs through the full pipeline (`AgenticLiteratureReview`)
+- Pipeline outputs (review text, paper summaries, directions) are mapped to `LLMTestCase` fields
+- `assert_test` evaluates with all three metrics; score >= 0.7 per metric = PASS
+
+**Results:** average grade across topics per metric.
+
+**Implementation:** `evals/` directory — see `evals/test_e2e_review.py` for the pytest integration. Run with `pytest evals/ -v`.
+
+**LLM for evaluation:** Uses the same OpenRouter model as the pipeline (configured via `OPENROUTER_*` env vars, mapped to `OPENAI_*` in `evals/conftest.py`).
