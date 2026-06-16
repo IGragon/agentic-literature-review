@@ -1,7 +1,7 @@
 [project]
 name = "agentic-literature-review"
 version = "0.1.0"
-description = "Add your description here"
+description = "Agentic system that autonomously searches, analyzes, and synthesizes academic papers into a structured literature review"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
